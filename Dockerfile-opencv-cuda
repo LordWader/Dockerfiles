@@ -1,0 +1,107 @@
+FROM nvidia/cuda:11.0-cudnn8-devel-ubuntu18.04-rc
+
+ARG APP_DIR=/opt/app-root/app
+ARG PYTHON_VERSION=3.8
+ARG OPENCV_VERSION=4.4.0
+WORKDIR $APP_DIR
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && \
+    apt -y install libgl1-mesa-glx python3.8 python3.8-dev python3-pip && \
+    python3.8 -m pip install --upgrade pip && \
+    python3.8 -m pip install poetry
+
+# Generic tools
+RUN apt install -y build-essential cmake pkg-config unzip yasm git checkinstall wget
+
+# Image I/O libs
+RUN apt install -y libjpeg-dev libpng-dev libtiff-dev
+
+# Video/Audio Libs - FFMPEG, GSTREAMER, x264 and so on.
+RUN apt install -y libavcodec-dev \
+                   libavformat-dev \
+                   libswscale-dev \
+                   libavresample-dev \
+                   libgstreamer1.0-dev \
+                   libgstreamer-plugins-base1.0-dev \
+                   libxvidcore-dev \
+                   x264 \
+                   libx264-dev \
+                   libfaac-dev \
+                   libmp3lame-dev \
+                   libtheora-dev \
+                   libfaac-dev \
+                   libmp3lame-dev \
+                   libvorbis-dev
+
+# OpenCore - Adaptive Multi Rate Narrow Band (AMRNB) and Wide Band (AMRWB) speech codec
+RUN apt install -y libopencore-amrnb-dev libopencore-amrwb-dev
+
+# Parallelism library C++ for CPU
+RUN apt-get install -y libtbb-dev
+
+# Optimization libraries for OpenCV
+RUN apt-get install -y libatlas-base-dev gfortran
+
+# Optional libraries
+RUN apt-get install -y libprotobuf-dev \
+                       protobuf-compiler \
+                       libgoogle-glog-dev \
+                       libgflags-dev \
+                       libgphoto2-dev \
+                       libeigen3-dev \
+                       libhdf5-dev \
+                       doxygen
+
+# Download zip files with source code
+RUN wget https://github.com/opencv/opencv/archive/${OPENCV_VERSION}.zip -O opencv.zip --progress=bar:force:noscroll --no-check-certificate && \
+    unzip -q opencv.zip && \
+    mv opencv-${OPENCV_VERSION} opencv && \
+    rm opencv.zip && \
+    wget https://github.com/opencv/opencv_contrib/archive/${OPENCV_VERSION}.zip -O opencv_contrib.zip --progress=bar:force:noscroll --no-check-certificate && \
+    unzip -q opencv_contrib.zip && \
+    mv opencv_contrib-${OPENCV_VERSION} opencv_contrib && \
+    rm opencv_contrib.zip
+
+ENV LD_LIBRARY_PATH=/usr/lib64:${LD_LIBRARY_PATH}
+
+# Cmake on sources
+RUN mkdir opencv/build && \
+    cd opencv/build && \
+    cmake \
+    -D CMAKE_BUILD_TYPE=RELEASE \
+    -D CMAKE_INSTALL_PREFIX=/usr/local \
+    -D WITH_TBB=ON \
+    -D ENABLE_FAST_MATH=1 \
+    -D CUDA_FAST_MATH=1 \
+    -D WITH_CUBLAS=1 \
+    -D CUDA_cublas_LIBRARY=/usr/lib/x86_64-linux-gnu/libcublas.so \
+    -D WITH_CUDA=ON \
+    -D BUILD_opencv_cudacodec=OFF \
+    -D WITH_CUDNN=ON \
+    -D OPENCV_DNN_CUDA=ON \
+    -D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-11.0 \
+    # arch bin for TESLA V100
+    -D CUDA_ARCH_BIN=7.0 \
+    -D WITH_V4L=ON \
+    -D WITH_QT=OFF \
+    -D WITH_OPENGL=ON \
+    -D WITH_GSTREAMER=ON \
+    -D OPENCV_GENERATE_PKGCONFIG=ON \
+    -D OPENCV_PC_FILE_NAME=opencv.pc \
+    -D OPENCV_ENABLE_NONFREE=ON \
+    -D BUILD_opencv_python3=$( [ ${PYTHON_VERSION%%.*} -ge 3 ] && echo "ON" || echo "OFF" ) \
+    -D BUILD_opencv_python2=$( [ ${PYTHON_VERSION%%.*} -lt 3 ] && echo "ON" || echo "OFF" ) \
+    -D PYTHON${PYTHON_VERSION%%.*}_EXECUTABLE=$(which python${PYTHON_VERSION}) \
+    -D PYTHON_DEFAULT_EXECUTABLE=$(which python${PYTHON_VERSION}) \
+    -D PYTHON3_PACKAGES_PATH=$(python3.8 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())") \
+    -D PYTHON_INCLUDE_DIR=$(python3.8 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())")  \
+    -D PYTHON_LIBRARY=$(python3.8 -c "import distutils.sysconfig as sysconfig; print(sysconfig.get_config_var('LIBDIR'))") \
+    -D OPENCV_EXTRA_MODULES_PATH=/opt/app-root/app/opencv_contrib/modules \
+    -D INSTALL_PYTHON_EXAMPLES=OFF \
+    -D INSTALL_C_EXAMPLES=OFF \
+    -D BUILD_EXAMPLES=OFF .. && \
+    make -j6 && \
+    make install && \
+    ldconfig
